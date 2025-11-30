@@ -1,97 +1,179 @@
-# script/ocr_pdf_pipeline.py
 import os
-from typing import List, Tuple
+import json
+from typing import List
+import cv2
+import numpy as np
+import imagehash
 from PIL import Image
-import pytesseract  # you may remove if unused after change
-
-from ocr_engines import run_ocr, OcrEngineName
-from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from paddleocr import PaddleOCR
+import pytesseract
+import re
+import imutils
 
-# If tesseract is not on PATH, set pytesseract.pytesseract.tesseract_cmd here
-# pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+# --------------------------------------------------------------------
+# BLUR DETECTION
+# --------------------------------------------------------------------
+def is_blurry(img, threshold=120):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    fm = cv2.Laplacian(gray, cv2.CV_64F).var()
+    return fm < threshold
 
-def ocr_image(image_path: str, lang: str = "eng", engine: OcrEngineName = "paddle") -> str:
-    """
-    Run OCR on single image using selected engine.
-    engine = "paddle" (better handwriting) or "tesseract".
-    """
-    img = Image.open(image_path)
-    text = run_ocr(img, engine=engine, lang=lang)
-    return text
+# --------------------------------------------------------------------
+# AUTO ROTATION
+# --------------------------------------------------------------------
+def auto_rotate(image):
+    try:
+        osd = pytesseract.image_to_osd(image)
+        angle = int(re.search(r"(?<=Rotate: )\d+", osd).group(0))
+        return imutils.rotate_bound(image, 360 - angle)
+    except:
+        return image
 
+# --------------------------------------------------------------------
+# DEDUPLICATION
+# --------------------------------------------------------------------
+def deduplicate_frames(paths: List[str], threshold: int = 5) -> List[str]:
+    unique = []
+    prev_hash = None
+    for p in paths:
+        try:
+            h = imagehash.average_hash(Image.open(p).convert("L"))
+        except:
+            continue
+        if prev_hash is None or abs(h - prev_hash) > threshold:
+            unique.append(p)
+            prev_hash = h
+    return unique
 
-def generate_original_pdf(image_paths: List[str], output_pdf_path: str) -> None:
-    """
-    Create image-only PDF ("original", like scan).
-    """
-    if not image_paths:
-        raise ValueError("No images provided for original PDF.")
+# --------------------------------------------------------------------
+# PREPROCESSING
+# --------------------------------------------------------------------
+def preprocess_image(path):
+    img = cv2.imread(path)
+    if img is None:
+        return None
 
-    pil_images = [Image.open(p).convert("RGB") for p in image_paths]
-    first = pil_images[0]
-    rest = pil_images[1:]
+    if is_blurry(img):
+        print("[WARN] Skipping blurry frame:", path)
+        return None
 
-    first.save(
-        output_pdf_path,
-        save_all=True,
-        append_images=rest,
-        format="PDF",
+    img = auto_rotate(img)
+    img = cv2.resize(img, None, fx=1.3, fy=1.3, interpolation=cv2.INTER_CUBIC)
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    gray = clahe.apply(gray)
+
+    binary = cv2.adaptiveThreshold(
+        gray, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY, 31, 10
     )
 
+    return binary
 
-def generate_text_pdf(text_pages: List[str], output_pdf_path: str) -> None:
-    """
-    Create text-only digital PDF (searchable).
-    Each element of text_pages is content for one page.
-    """
-    if not text_pages:
-        raise ValueError("No text pages for digital PDF.")
+def preprocess_and_save(paths):
+    processed = []
+    for p in paths:
+        img = preprocess_image(p)
+        if img is None:
+            continue
+        base = os.path.basename(p)
+        out_path = os.path.join(os.path.dirname(p), f"{base}_proc.png")
+        cv2.imwrite(out_path, img)
+        processed.append(out_path)
+    return processed
 
-    page_width, page_height = A4
-    c = canvas.Canvas(output_pdf_path, pagesize=A4)
+# --------------------------------------------------------------------
+# OCR (Paddle + Tesseract)
+# --------------------------------------------------------------------
+def run_ocr(processed_paths):
+    ocr = PaddleOCR(use_angle_cls=True, lang="en", ocr_version="PP-OCRv4", drop_score=0.25)
+    results = []
 
-    for page_text in text_pages:
-        text_obj = c.beginText()
-        # margin
-        text_obj.setTextOrigin(40, page_height - 60)
-        text_obj.setFont("Helvetica", 11)
+    for p in processed_paths:
+        lines = []
 
-        for line in page_text.splitlines():
-            # simple line wrapping
-            if len(line) > 100:
-                while len(line) > 100:
-                    text_obj.textLine(line[:100])
-                    line = line[100:]
+        # Tesseract for printed material
+        text_tess = pytesseract.image_to_string(Image.open(p), lang="eng")
+        for line in text_tess.split("\n"):
+            if line.strip():
+                lines.append(line.strip())
+
+        # PaddleOCR for handwriting
+        res = ocr.ocr(p, cls=True)
+        if res and res[0]:
+            for box, (text, score) in res[0]:
+                if score >= 0.25:
+                    lines.append(text.strip())
+
+        results.append(lines)
+
+    return results
+
+# --------------------------------------------------------------------
+# PDF BUILDERS
+# --------------------------------------------------------------------
+def build_original_pdf(image_paths, output_path):
+    pil_images = []
+    for p in image_paths:
+        img = cv2.imread(p)
+        if img is None:
+            continue
+        img = auto_rotate(img)
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        pil_images.append(Image.fromarray(rgb))
+
+    pil_images[0].save(output_path, save_all=True, append_images=pil_images[1:])
+
+def build_digital_pdf(original_paths, ocr_lines, output_path):
+    c = canvas.Canvas(output_path, pagesize=A4)
+    width, height = A4
+
+    for img, lines in zip(original_paths, ocr_lines):
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(40, height - 40, os.path.basename(img))
+
+        c.setFont("Helvetica", 10)
+        text_obj = c.beginText(40, height - 70)
+
+        for line in lines:
+            if text_obj.getY() < 80:
+                c.drawText(text_obj)
+                c.showPage()
+                text_obj = c.beginText(40, height - 70)
             text_obj.textLine(line)
+
         c.drawText(text_obj)
         c.showPage()
 
     c.save()
 
-
-def ocr_frames_to_pdfs(
-    frame_paths: List[str],
-    output_dir: str,
-    lang: str = "eng",
-) -> Tuple[str, str]:
-    """
-    full pipeline:
-      - OCR each frame
-      - generate original.pdf and digital.pdf
-    """
+# --------------------------------------------------------------------
+# MAIN FUNCTION
+# --------------------------------------------------------------------
+def ocr_frames_to_pdfs(frame_paths, output_dir):
     os.makedirs(output_dir, exist_ok=True)
 
-    text_pages: List[str] = []
-    for idx, frame_path in enumerate(sorted(frame_paths)):
-        print(f"OCR frame {idx+1}/{len(frame_paths)}: {frame_path}", flush=True)
-        text = ocr_image(frame_path, lang=lang, engine="paddle")
-        text_pages.append(text)
+    unique = deduplicate_frames(frame_paths)
+    processed = preprocess_and_save(unique)
+    if not processed:
+        return {"success": False, "error": "No frames processed"}
 
-    original_pdf_path = os.path.join(output_dir, "original.pdf")
-    digital_pdf_path = os.path.join(output_dir, "digital.pdf")
+    ocr_lines = run_ocr(processed)
 
-    generate_original_pdf(frame_paths, original_pdf_path)
-    generate_text_pdf(text_pages, digital_pdf_path)
+    original_pdf = os.path.join(output_dir, "original.pdf")
+    digital_pdf = os.path.join(output_dir, "digital.pdf")
 
-    return original_pdf_path, digital_pdf_path
+    build_original_pdf(unique, original_pdf)
+    build_digital_pdf(unique, ocr_lines, digital_pdf)
+
+    return {
+        "success": True,
+        "original_pdf": original_pdf,
+        "digital_pdf": digital_pdf,
+        "num_frames": len(frame_paths),
+        "num_unique": len(unique)
+    }

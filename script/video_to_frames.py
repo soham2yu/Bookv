@@ -1,60 +1,86 @@
-# script/video_to_frames.py
+"""
+video_to_frames.py
+
+Extracts clean high-resolution frames for OCR from video.
+Removes blurry frames and normalizes resolution.
+"""
+
 import os
 import cv2
 from typing import List
+import numpy as np
 
-def extract_frames(video_path: str, output_dir: str, target_fps: float = 1.0) -> List[str]:
+
+def is_blurry(image, threshold=120.0) -> bool:
     """
-    Extract frames from video at approx target_fps (frames per second).
-    Returns list of frame file paths in order.
+    Detect if frame is blurry using Laplacian sharpness metric.
+    Returns True if blurry.
     """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    fm = cv2.Laplacian(gray, cv2.CV_64F).var()
+    return fm < threshold
+
+
+def extract_frames(
+    video_path: str,
+    output_dir: str,
+    target_fps: float = 1.0,
+) -> List[str]:
+
     os.makedirs(output_dir, exist_ok=True)
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        raise RuntimeError(f"Cannot open video: {video_path}")
+        raise RuntimeError(f"❌ Failed to open video: {video_path}")
 
-    orig_fps = cap.get(cv2.CAP_PROP_FPS)
-    if orig_fps <= 0:
-        orig_fps = 25.0  # fallback
+    video_fps = cap.get(cv2.CAP_PROP_FPS)
+    if not video_fps or video_fps <= 0:
+        video_fps = 25.0
 
-    frame_interval = max(int(orig_fps // target_fps), 1)
+    step = max(int(round(video_fps / target_fps)), 1)
 
-    frame_paths = []
+    # Force high resolution output
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+
     frame_idx = 0
     saved_idx = 0
+    frame_paths: List[str] = []
 
     while True:
-        ret, frame = cap.read()
-        if not ret:
+        success, frame = cap.read()
+        if not success:
             break
 
-        if frame_idx % frame_interval == 0:
-            # basic preprocessing to help OCR
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            # normalize contrast
-            gray = cv2.equalizeHist(gray)
-            # optional: resize to improve text clarity
-            height, width = gray.shape
-            if max(height, width) < 1000:
-                scale = 1000 / max(height, width)
-                gray = cv2.resize(
-                    gray,
-                    (int(width * scale), int(height * scale)),
-                    interpolation=cv2.INTER_CUBIC,
-                )
+        if frame_idx % step == 0:
+            # Skip blurry frames
+            if is_blurry(frame, threshold=160.0):
+                frame_idx += 1
+                continue
+
+            # Resize to 1920x1080 if needed
+            frame = cv2.resize(frame, (1920, 1080))
 
             frame_name = f"frame_{saved_idx:04d}.png"
             frame_path = os.path.join(output_dir, frame_name)
-            cv2.imwrite(frame_path, gray)
-            frame_paths.append(frame_path)
+
+            cv2.imwrite(frame_path, frame, [cv2.IMWRITE_PNG_COMPRESSION, 0])
+
+            frame_paths.append(os.path.abspath(frame_path))
             saved_idx += 1
 
         frame_idx += 1
 
     cap.release()
-
-    if not frame_paths:
-        raise RuntimeError("No frames extracted. Check video file and codecs.")
-
     return frame_paths
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) != 3:
+        print("Usage: python video_to_frames.py <video_path> <output_dir>")
+        sys.exit(1)
+
+    frames = extract_frames(sys.argv[1], sys.argv[2])
+    print(f" Extracted {len(frames)} valid frames.")

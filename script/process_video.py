@@ -1,50 +1,93 @@
-# script/process_video.py
 import os
-import sys
 import json
-from pathlib import Path
-from typing import Any, Dict
-
-from video_to_frames import extract_frames
+import cv2
 from ocr_pdf_pipeline import ocr_frames_to_pdfs
 
 
-def main() -> None:
-    if len(sys.argv) < 3:
-        print(json.dumps({"error": "Usage: process_video.py <video_path> <output_dir>"}))
-        sys.exit(1)
+def frame_quality_scores(frame, prev_gray=None):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    sharp = cv2.Laplacian(gray, cv2.CV_64F).var()
+    bright = gray.mean()
+    motion = 0.0
+    if prev_gray is not None:
+        diff = cv2.absdiff(gray, prev_gray)
+        motion = diff.mean()
+    return sharp, bright, motion, gray
 
-    video_path = sys.argv[1]
-    output_dir = sys.argv[2]
+
+def is_good_frame(sharp, bright, motion,
+                  sharp_thresh=80, bright_min=60, bright_max=200,
+                  motion_min=5):
+    """
+    Keep only frames that are:
+      - sharp enough
+      - not too dark/bright
+      - have some motion change compared to previous (page turn)
+    """
+    return (
+        sharp > sharp_thresh
+        and bright_min < bright < bright_max
+        and motion > motion_min
+    )
+
+
+def extract_frames(video_path, output_dir, step=5):
+    os.makedirs(output_dir, exist_ok=True)
+    cap = cv2.VideoCapture(video_path)
+    count = 0
+    file_count = 0
+    prev_gray = None
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        if count % step == 0:
+            sharp, bright, motion, gray = frame_quality_scores(frame, prev_gray)
+
+            if is_good_frame(sharp, bright, motion):
+                path = os.path.join(output_dir, f"frame_{file_count:05d}.jpg")
+                cv2.imwrite(path, frame)
+                file_count += 1
+
+            prev_gray = gray
+
+        count += 1
+
+    cap.release()
+
+    return [
+        os.path.join(output_dir, f)
+        for f in sorted(os.listdir(output_dir))
+        if f.lower().endswith(".jpg")
+    ]
+
+
+def main():
+    import sys
+    if len(sys.argv) < 3:
+        print(json.dumps({"success": False, "error": "Usage: python process_video.py <video_path> <output_dir>"}))
+        return
+
+    video_path, out_dir = sys.argv[1], sys.argv[2]
+    frames_dir = os.path.join(out_dir, "frames")
 
     try:
-        video_path = str(Path(video_path).resolve())
-        output_dir = str(Path(output_dir).resolve())
-        os.makedirs(output_dir, exist_ok=True)
+        print("Extracting frames...")
+        frames = extract_frames(video_path, frames_dir, step=5)
 
-        frames_dir = os.path.join(output_dir, "frames")
-        os.makedirs(frames_dir, exist_ok=True)
+        if not frames:
+            print(json.dumps({"success": False, "error": "No usable frames extracted"}))
+            return
 
-        frame_paths = extract_frames(video_path, frames_dir, target_fps=1.0)
+        print("Running OCR and PDF generation...")
+        result = ocr_frames_to_pdfs(frames, out_dir)
 
-        original_pdf, digital_pdf = ocr_frames_to_pdfs(
-            frame_paths,
-            output_dir,
-            lang="eng",  # extend if you want multi-lang
-        )
-
-        result: Dict[str, Any] = {
-            "success": True,
-            "original_pdf": original_pdf,
-            "digital_pdf": digital_pdf,
-        }
-        print(json.dumps(result))
-        sys.exit(0)
+        print(json.dumps(result, ensure_ascii=False))
 
     except Exception as e:
-        err = {"success": False, "error": str(e)}
-        print(json.dumps(err))
-        sys.exit(1)
+        print(json.dumps({"success": False, "error": str(e)}))
 
 
 if __name__ == "__main__":

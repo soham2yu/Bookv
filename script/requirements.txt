@@ -3,3 +3,7 @@ pillow
 pytesseract
 reportlab
 numpy
+paddlepaddle==2.6.2         # or the version that works on your CPU
+paddleocr==2.7.0.0
+imagehash
+reportlab
