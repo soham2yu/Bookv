@@ -7,30 +7,29 @@ const UploadProcess: React.FC = () => {
   const [pdfLinks, setPdfLinks] = useState<{ original?: string; digital?: string }>({});
 
   const handleUpload = async () => {
-    if (!file) {
-      setMessage("Please select a file first");
-      return;
-    }
+    if (!file) return;
 
     setUploading(true);
     setMessage("");
 
-    try {
-      const form = new FormData();
-      form.append("file", file); // IMPORTANT — server expects "file"
+    const formData = new FormData();
+    formData.append("video", file);
 
-      const response = await fetch("http://localhost:5000/api/scan", {
+    try {
+      const response = await fetch("http://localhost:5000/api/process-video", {
         method: "POST",
-        body: form,
+        body: formData,
       });
 
       const result = await response.json();
+      console.log(result);
+
       if (!response.ok) {
         setMessage(result.error || "Upload Failed ❌");
       } else {
         setPdfLinks({
-          original: result.originalPdfUrl,
-          digital: result.digitalPdfUrl,
+          original: result.originalPdf,
+          digital: result.digitalPdf,
         });
         setMessage("Upload Complete ✔");
       }
@@ -52,7 +51,7 @@ const UploadProcess: React.FC = () => {
     }}>
       <input
         type="file"
-        accept="video/*,image/*"
+        accept="video/*"
         onChange={(e) => setFile(e.target.files ? e.target.files[0] : null)}
       />
 
@@ -68,13 +67,13 @@ const UploadProcess: React.FC = () => {
 
       {pdfLinks.original && (
         <a href={`http://localhost:5000${pdfLinks.original}`} target="_blank" rel="noreferrer">
-          Download Original PDF
+          📄 Download Original PDF
         </a>
       )}
 
       {pdfLinks.digital && (
         <a href={`http://localhost:5000${pdfLinks.digital}`} target="_blank" rel="noreferrer">
-          Download Digital PDF
+          ✨ Download Digital PDF
         </a>
       )}
     </div>

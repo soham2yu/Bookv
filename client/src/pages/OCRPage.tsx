@@ -15,9 +15,10 @@ export default function OCRPage() {
     formData.append("video", file);
 
     try {
-      const res = await axios.post("http://localhost:5000/process-video", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      const res = await axios.post(
+        "http://localhost:5000/api/process-video",
+        formData
+      );
 
       console.log(res.data);
       setResult(res.data);
@@ -36,8 +37,11 @@ export default function OCRPage() {
         onChange={(e) => setFile(e.target.files?.[0] || null)}
       />
 
-      <button className="bg-black p-2 rounded mx-2" onClick={handleUpload}
-        disabled={status === "Processing..."}>
+      <button
+        className="bg-black p-2 rounded mx-2"
+        onClick={handleUpload}
+        disabled={status === "Processing..."}
+      >
         {status === "Processing..." ? "Processing..." : "Upload & Process"}
       </button>
 
@@ -45,11 +49,19 @@ export default function OCRPage() {
 
       {result && (
         <div>
-          <a href={`http://localhost:5000${result.original_pdf}`} target="_blank" className="text-green-400">
+          <a
+            href={`http://localhost:5000${result.original_pdf}`}
+            target="_blank"
+            className="text-green-400"
+          >
             View Original PDF
           </a>
           <br />
-          <a href={`http://localhost:5000${result.digital_pdf}`} target="_blank" className="text-blue-400">
+          <a
+            href={`http://localhost:5000${result.digital_pdf}`}
+            target="_blank"
+            className="text-blue-400"
+          >
             View Digital PDF
           </a>
         </div>
