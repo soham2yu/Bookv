@@ -3,7 +3,7 @@ import React, { useState } from "react";
 const UploadProcess: React.FC = () => {
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState<string>("");
   const [pdfLinks, setPdfLinks] = useState<{ original?: string; digital?: string }>({});
 
   const handleUpload = async () => {
@@ -17,7 +17,7 @@ const UploadProcess: React.FC = () => {
 
     try {
       const form = new FormData();
-      form.append("file", file); // IMPORTANT — server expects "file"
+      form.append("file", file); // IMPORTANT -> matches backend upload.single("file")
 
       const response = await fetch("http://localhost:5000/api/scan", {
         method: "POST",
@@ -25,15 +25,19 @@ const UploadProcess: React.FC = () => {
       });
 
       const result = await response.json();
+      console.log(result);
+
       if (!response.ok) {
         setMessage(result.error || "Upload Failed ❌");
-      } else {
-        setPdfLinks({
-          original: result.originalPdfUrl,
-          digital: result.digitalPdfUrl,
-        });
-        setMessage("Upload Complete ✔");
+        return;
       }
+
+      setPdfLinks({
+        original: result.originalPdfUrl,
+        digital: result.digitalPdfUrl,
+      });
+
+      setMessage("Processing Completed ✔ PDFs Ready to Download");
     } catch (err) {
       console.error(err);
       setMessage("Upload Failed ❌");
@@ -44,12 +48,17 @@ const UploadProcess: React.FC = () => {
 
   return (
     <div style={{
-      padding: 20,
+      padding: 30,
       display: "flex",
       flexDirection: "column",
-      gap: 16,
-      width: 400,
+      gap: 15,
+      width: "100%",
+      maxWidth: 500,
+      margin: "0 auto",
+      textAlign: "center"
     }}>
+      <h2>BookVision OCR Processor</h2>
+
       <input
         type="file"
         accept="video/*,image/*"
@@ -59,7 +68,14 @@ const UploadProcess: React.FC = () => {
       <button
         onClick={handleUpload}
         disabled={uploading}
-        style={{ padding: "10px", background: "#000", color: "#fff", cursor: "pointer" }}
+        style={{
+          padding: 12,
+          background: "black",
+          color: "white",
+          borderRadius: 6,
+          cursor: "pointer",
+          fontSize: 16
+        }}
       >
         {uploading ? "Processing..." : "Upload & Process"}
       </button>
@@ -67,14 +83,24 @@ const UploadProcess: React.FC = () => {
       {message && <p>{message}</p>}
 
       {pdfLinks.original && (
-        <a href={`http://localhost:5000${pdfLinks.original}`} target="_blank" rel="noreferrer">
+        <a
+          href={`http://localhost:5000${pdfLinks.original}`}
+          target="_blank"
+          rel="noreferrer"
+          style={{ color: "blue" }}
+        >
           Download Original PDF
         </a>
       )}
 
       {pdfLinks.digital && (
-        <a href={`http://localhost:5000${pdfLinks.digital}`} target="_blank" rel="noreferrer">
-          Download Digital PDF
+        <a
+          href={`http://localhost:5000${pdfLinks.digital}`}
+          target="_blank"
+          rel="noreferrer"
+          style={{ color: "green" }}
+        >
+          Download Digital PDF (Searchable)
         </a>
       )}
     </div>

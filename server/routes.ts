@@ -1,48 +1,71 @@
-import { Router } from "express";
+import express, { Request, Response } from "express";
 import multer from "multer";
-import fs from "fs";
 import path from "path";
-import { runProcessVideo } from "./runPython";
+import fs from "fs";
+import { spawn } from "child_process";
 
-const router = Router();
+const router = express.Router();
 
-// Directories for upload and output
-const uploadsDir = path.join(__dirname, "../../uploads");
-const outputsDir = path.join(__dirname, "../../outputs");
+const UPLOAD_DIR = path.join(__dirname, "uploads");
+const OUTPUT_DIR = path.join(__dirname, "output");
 
-[uploadsDir, outputsDir].forEach((dir) => {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-});
+if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
-// Multer config
+// File storage config
 const storage = multer.diskStorage({
-  destination: (_, __, cb) => cb(null, uploadsDir),
-  filename: (_, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `${Date.now()}${ext}`);
+  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+  filename: (_req, file, cb) => {
+    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    cb(null, unique + path.extname(file.originalname));
   },
 });
 
 const upload = multer({ storage });
 
-// MAIN ENDPOINT: process video
-router.post("/process-video", upload.single("video"), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: "No video uploaded" });
+router.post("/scan", upload.single("file"), async (req: Request, res: Response) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
-  const jobId = req.file.filename.split(".")[0];
-  const jobDir = path.join(outputsDir, jobId);
+    const inputPath = req.file.path;
+    const jobId = path.basename(inputPath, path.extname(inputPath));
+    const jobOutputDir = path.join(OUTPUT_DIR, jobId);
 
-  const result = await runProcessVideo(req.file.path, jobDir);
+    if (!fs.existsSync(jobOutputDir)) fs.mkdirSync(jobOutputDir, { recursive: true });
 
-  if (!result.success) {
-    return res.status(500).json({ error: result.error });
+    const pythonCmd = process.env.PYTHON_CMD || "python";
+    const scriptPath = path.join(__dirname, "..", "..", "script", "ocr_pdf_pipeline.py");
+
+    const args = [
+      scriptPath,
+      "--input",
+      inputPath,
+      "--output-dir",
+      jobOutputDir,
+    ];
+
+    console.log("\n[SERVER] Running OCR:", pythonCmd, args.join(" "));
+
+    const child = spawn(pythonCmd, args, { shell: false });
+
+    child.stdout.on("data", (data) => console.log("[OCR]", data.toString()));
+    child.stderr.on("data", (data) => console.log("[OCR_ERR]", data.toString()));
+
+    child.on("close", (code) => {
+      if (code !== 0) {
+        return res.status(500).json({ error: "OCR process failed", exitCode: code });
+      }
+
+      res.json({
+        ok: true,
+        jobId,
+        originalPdfUrl: `/files/${jobId}/original.pdf`,
+        digitalPdfUrl: `/files/${jobId}/digital.pdf`,
+      });
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message });
   }
-
-  res.json({
-    success: true,
-    original_pdf: `/static/${jobId}/original.pdf`,
-    digital_pdf: `/static/${jobId}/digital.pdf`,
-  });
 });
 
 export default router;
