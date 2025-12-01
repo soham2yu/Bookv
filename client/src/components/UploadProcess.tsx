@@ -34,7 +34,6 @@ const UploadProcess: React.FC = () => {
           original: result.originalPdf,
           digital: result.digitalPdf,
         });
-
         setMessage("Processing Completed ✔ PDFs Ready");
       }
     } catch (err) {
@@ -77,28 +76,26 @@ const UploadProcess: React.FC = () => {
 
       <p>{message}</p>
 
-{pdfLinks.original && (
-  <a
-    href={`http://localhost:5000${pdfLinks.original}`}
-    target="_blank"
-    rel="noopener noreferrer"
-    style={{ display: "block", marginTop: 10 }}
-  >
-    📄 View Original PDF
-  </a>
-)}
+      {pdfLinks.original && (
+        <a
+          href={`http://localhost:5000/static/${pdfLinks.original}`}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          📄 View Original PDF
+        </a>
+      )}
 
-{pdfLinks.digital && (
-  <a
-    href={`http://localhost:5000${pdfLinks.digital}`}
-    target="_blank"
-    rel="noopener noreferrer"
-    style={{ display: "block", marginTop: 10 }}
-  >
-    ✨ View Digital PDF
-  </a>
-)}
-
+      {pdfLinks.digital && (
+        <a
+          href={`http://localhost:5000/static/${pdfLinks.digital}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ display: "block", marginTop: 10 }}
+        >
+          ✨ View Digital PDF
+        </a>
+      )}
     </div>
   );
 };
