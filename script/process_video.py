@@ -1,6 +1,13 @@
 import os
 import json
+import sys
 import cv2
+
+# Ensure the script directory is on sys.path so sibling module imports work
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
 from ocr_pdf_pipeline import ocr_frames_to_pdfs
 
 

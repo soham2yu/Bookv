@@ -410,7 +410,56 @@ def main() -> None:
         )
     except Exception as e:
         print(f"[ERROR] {e}", file=sys.stderr)
-        sys.exit(1)
+
+
+# Compatibility helper used by `process_video.py` which expects
+# a function named `ocr_frames_to_pdfs(frames, out_dir)` that
+# returns a JSON-serializable dict with `success` and paths.
+def ocr_frames_to_pdfs(frame_paths: List[str], out_dir: Path) -> dict:
+    """
+    Accepts a list of image file paths (frames) and produces
+    `original.pdf` (image-based) and `digital.pdf` (text-based)
+    inside `out_dir`. Returns a dict suitable for JSON output.
+    """
+    ensure_dir(out_dir)
+
+    # Load images
+    pages: List[np.ndarray] = []
+    page_texts: List[str] = []
+
+    for fp in frame_paths:
+        img = cv2.imread(str(fp))
+        if img is None:
+            # skip unreadable frames
+            continue
+
+        # Crop / deskew to page region
+        page_bgr = extract_page_region(img)
+        pages.append(page_bgr)
+
+        # Prepare for OCR and run
+        prep = preprocess_for_ocr(page_bgr)
+        pil_img = frame_to_pil(prep)
+        text = pytesseract.image_to_string(pil_img, config=OCR_CONFIG)
+        page_texts.append(text)
+
+    if not pages:
+        return {"success": False, "error": "No valid frames provided"}
+
+    original_pdf_path = out_dir / "original.pdf"
+    digital_pdf_path = out_dir / "digital.pdf"
+
+    try:
+        save_original_pdf(pages, original_pdf_path)
+        generate_text_pdf(page_texts, digital_pdf_path)
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+    return {
+        "success": True,
+        "original_pdf": str(original_pdf_path),
+        "digital_pdf": str(digital_pdf_path),
+    }
 
 
 if __name__ == "__main__":

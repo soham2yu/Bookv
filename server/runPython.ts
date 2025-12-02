@@ -1,7 +1,7 @@
 import { spawn } from "child_process";
 import path from "path";
 
-export default async function runProcessVideo(videoPath: string, outputDir: string) {
+export async function runProcessVideo(videoPath: string, outputDir: string) {
   console.log("⚙️ Starting Python script...");
   console.log("📁 Video Path:", videoPath);
   console.log("📁 Output Dir:", outputDir);
